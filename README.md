@@ -6,7 +6,7 @@
 
 ## 1 原理揭晓
 
-如何用 usb 调试给 app 提权」这个问题乍一看确实没问题，但是知乎有个回答是「先问是不是，再问为什么」我觉得说的很好。我被这个问题给困扰了很久，最后发现我问错了。先放出结论「并不是给 app 提权，而是运行了一个由设立了权限的新程序」
+「如何用 usb 调试给 app 提权」这个问题乍一看确实没问题，但是知乎有个回答是「先问是不是，再问为什么」我觉得说的很好。我被这个问题给困扰了很久，最后发现我问错了。先放出结论「并不是给 app 提权，而是运行了一个有 shell 权限的新程序」
 
 刚才的问题先放一边，我来问大家个新问题，怎样让 app 获取 root 权限？这个问题答案已经有不少了，网上一查便可知其实是获取「Runtime.getRuntime().exec」的流，在里面用su提权，然后就可以执行需要 root 权限的 shell 命令，比如挂载 system 读写，访问 data 分区，用 shell 命令静默安装，等等。话说回来，是不是和我们今天的主题有点像，如何使 app 获取 shell 权限？嗯，其实差不多，思路也类似，因为本来 root 啦， shell 啦，根本就不是 Android 应用层的名词呀，他们本来就是 Linux 里的名词，只不过是 Android 框架运行于 Linux 层之上， 我们可以调用 shell 命令，也可以在shell 里调用 su 来使shell 获取 root 权限，来绕过 Android 层做一些被限制的事。然而在 app 里调用 shell 命令，其进程还是 app 的，权限还是受限。所以就不能在 app 里运行 shell 命令，那么问题来了，不在 app 里运行在哪运行？答案是在 pc 上运行。当然不可能是 pc 一直连着手机啦，而是 pc 上在 shell 里运行独立的一个 java 程序，这个程序因为是在 shell 里启动的，所以具有 shell 权限。我们想一下，这个 Java 程序在 shell 里运行，建立本地 socket 服务器，和 app 通信，远程执行 app 下发的代码。因为即使拔掉了数据线，这个 Java 程序也不会停止，只要不重启他就一直活着，执行我们的命令，这不就是看起来 app 有了 shell 权限？现在真相大白，飞智和黑域用 usb 调试激活的那一下，其实是启动那个 Java 程序，飞智是执行模拟按键，黑域是监听系统事件，你想干啥就任你开发了。「注：黑域和飞智由于进程管理的需要，其实是先用 shell 启动一个 so ，然后再用 so 做跳板启动 Java 程序，而且 so 也充当守护进程，当 Java 意外停止可以重新启动，读着有兴趣可以自行研究，在此不多做说明」
 
@@ -58,7 +58,7 @@ public class Main {
 
 ![](http://article.gtf35.top/app_process/%E7%BC%96%E8%AF%91%E5%87%BA%E6%9D%A5%E7%9A%84apk.JPG)
 
-因为 apk 就是 zip 所以我们直接解压出 apk 文件，然后执行 ：
+因为 apk 就是 zip 所以我们直接解压出 apk 文件里的classes.dex，然后执行 ：
 
 ```shell
 adb push classes.dex /data/local/tmp
@@ -107,7 +107,7 @@ public class ServiceThread extends Thread {
 }
 ```
 
-其中 ServiceShellUtils 用到了开源项目 ShellUtils 在此感谢。这个类用来执行 shell 命令。
+其中 [ServiceShellUtils](https://github.com/gtf35/app_process-shell-use/blob/master/app/src/main/java/shellService/ServiceShellUtils.java) 用到了开源项目 ShellUtils 在此感谢。这个类用来执行 shell 命令。
 
 然后在 Main 中调用这个线程：
 
