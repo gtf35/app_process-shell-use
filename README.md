@@ -6,7 +6,8 @@
 
 ## 1 原理揭晓
 
-「如何用 usb 调试给 app 提权」这个问题乍一看确实没问题，但是知乎有个回答是「先问是不是，再问为什么」我觉得说的很好。我被这个问题给困扰了很久，最后发现我问错了。先放出结论「并不是给 app 提权，而是运行了一个由设立了权限的新程序」
+如何用 usb 调试给 app 提权」这个问题乍一看确实没问题，但是知乎有个回答是「先问是不是，再问为什么」我觉得说的很好。我被这个问题给困扰了很久，最后发现我问错了。先放出结论「并不是给 app 提权，而是运行了一个由设立了权限的新程序」
+
 刚才的问题先放一边，我来问大家个新问题，怎样让 app 获取 root 权限？这个问题答案已经有不少了，网上一查便可知其实是获取「Runtime.getRuntime().exec」的流，在里面用su提权，然后就可以执行需要 root 权限的 shell 命令，比如挂载 system 读写，访问 data 分区，用 shell 命令静默安装，等等。话说回来，是不是和我们今天的主题有点像，如何使 app 获取 shell 权限？嗯，其实差不多，思路也类似，因为本来 root 啦， shell 啦，根本就不是 Android 应用层的名词呀，他们本来就是 Linux 里的名词，只不过是 Android 框架运行于 Linux 层之上， 我们可以调用 shell 命令，也可以在shell 里调用 su 来使shell 获取 root 权限，来绕过 Android 层做一些被限制的事。然而在 app 里调用 shell 命令，其进程还是 app 的，权限还是受限。所以就不能在 app 里运行 shell 命令，那么问题来了，不在 app 里运行在哪运行？答案是在 pc 上运行。当然不可能是 pc 一直连着手机啦，而是 pc 上在 shell 里运行独立的一个 java 程序，这个程序因为是在 shell 里启动的，所以具有 shell 权限。我们想一下，这个 Java 程序在 shell 里运行，建立本地 socket 服务器，和 app 通信，远程执行 app 下发的代码。因为即使拔掉了数据线，这个 Java 程序也不会停止，只要不重启他就一直活着，执行我们的命令，这不就是看起来 app 有了 shell 权限？现在真相大白，飞智和黑域用 usb 调试激活的那一下，其实是启动那个 Java 程序，飞智是执行模拟按键，黑域是监听系统事件，你想干啥就任你开发了。「注：黑域和飞智由于进程管理的需要，其实是先用 shell 启动一个 so ，然后再用 so 做跳板启动 Java 程序，而且 so 也充当守护进程，当 Java 意外停止可以重新启动，读着有兴趣可以自行研究，在此不多做说明」
 
 ## 2 好耶！是 app_process
@@ -73,9 +74,9 @@ app_process -Djava.class.path=/data/local/tmp/classes.dex /system/bin shellServi
 
 ##4 具有实用性
 
-只能输出肯定是不行的，不具有实用性。我们之前说过，我们应该建立个本地 socket 服务器来接受命令并执行，这里的「Service」类实现了这个功能，因为如何建立 socket 不是文章的重点，所以大家只要知道这个类内部实现了一个「ServiceGetText」接口，在收到命令之后会把命令内容作为参数回掉 getText 方法，然后我们执行 shell 命令之后，吧结果作为字符串返回即可，具体实现可以看文末的 GitHub。
+只能输出肯定是不行的，不具有实用性。我们之前说过，我们应该建立个本地 socket 服务器来接受命令并执行，这里的「Service」类实现了这个功能，因为如何建立 socket 不是文章的重点，所以大家只要知道这个类内部实现了一个「ServiceGetText」接口，在收到命令之后会把命令内容作为参数回掉 getText 方法，然后我们执行 shell 命令之后，吧结果作为字符串返回即可，具体实现可以看查看源码[Service](https://github.com/gtf35/app_process-shell-use/blob/master/app/src/main/java/shellService/Service.java)。
 
-我们新建一个「ServiceThread」来运行「Service」服务和执行设立了命令：
+我们新建一个「[ServiceThread](https://github.com/gtf35/app_process-shell-use/blob/master/app/src/main/java/shellService/ServiceThread.java)」来运行「Service」服务和执行设立了命令：
 
 ```java
 public class ServiceThread extends Thread {
@@ -121,10 +122,23 @@ public class Main {
 }
 ```
 
-这样，我们服务端就准备好了，我们来写控制服务端的 app 。我们新建类「SocketClient」用来和服务端进行通信，并在活动里调用他：
+这样，我们服务端就准备好了，我们来写控制服务端的 app 。我们新建类「SocketClient」用来和服务端进行通信，并在活动里调用他（完整代码请参看[SocketClient](https://github.com/gtf35/app_process-shell-use/blob/master/app/src/main/java/top/gtf35/shellapplicatontest/SocketClient.java)和[MainActivity](https://github.com/gtf35/app_process-shell-use/blob/master/app/src/main/java/top/gtf35/shellapplicatontest/MainActivity.java)）：
 
 ```java
-
+private void runShell(final String cmd){
+        if (TextUtils.isEmpty(cmd)) return;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+              new SocketClient(cmd, new SocketClient.onServiceSend() {
+                  @Override
+                  public void getSend(String result) {
+                      showTextOnTextView(result);
+                  }
+              });
+            }
+        }).start();
+    }
 ```
 
 然后重复 3 小节的操作，运行这个服务端:
@@ -134,7 +148,7 @@ public class Main {
 然后安装 apk ，运行：
 
 ```java
-
+input text HelloWord
 ```
 
 ![](http://article.gtf35.top/app_process/%E6%89%8B%E6%9C%BA%E8%BF%90%E8%A1%8C.gif)
@@ -154,3 +168,5 @@ public class Main {
 [Android上app_process启动java进程](https://blog.csdn.net/u010651541/article/details/53163542) 通俗易懂的教程
 
 [使用 app_process 来调用高权限 API](https://haruue.moe/blog/2017/08/30/call-privileged-api-with-app-process/) 分析的很深刻的教程
+
+本文的项目可以在[GitHub上获取](https://github.com/gtf35/app_process-shell-use)：https://github.com/gtf35/app_process-shell-use
